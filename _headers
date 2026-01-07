@@ -1,0 +1,32 @@
+/*
+  Content-Security-Policy: default-src 'self'; script-src 'self' https://static.cloudflareinsights.com https://unpkg.com; style-src 'self' 'unsafe-inline'; img-src 'self' https://travel.jdge.cc https://travel-93o.pages.dev data:; connect-src 'self' https://travel.jdge.cc https://travel-93o.pages.dev https://overpass-api.de; object-src 'none'; base-uri 'self'; form-action 'self'; frame-src https://travel.jdge.cc https://travel-93o.pages.dev;
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: SAMEORIGIN
+  Strict-Transport-Security: max-age=31536000; includeSubDomains; preload
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: geolocation=(),camera=(),microphone=(),payment=(),usb=(),xr-spatial-tracking=()
+  Cross-Origin-Embedder-Policy: unsafe-none
+  Cross-Origin-Opener-Policy: same-origin-allow-popups
+  Cross-Origin-Resource-Policy: cross-origin
+
+# Added CORS headers for cross-origin resources (e.g., scripts or API calls to mitigate CORB)
+/*
+  Access-Control-Allow-Origin: *
+  Access-Control-Allow-Methods: GET, POST, OPTIONS
+  Access-Control-Allow-Headers: Content-Type
+
+/static/images/*
+  Cache-Control: public, max-age=86400
+
+/static/*
+  Cache-Control: public, max-age=86400
+  # Added CORS for static assets like scripts (e.g., if hosting osmtogeojson.js locally here)
+  Access-Control-Allow-Origin: *
+
+/secure/*
+  Cache-Control: no-store, no-cache, must-revalidate
+
+# Optional: If you have an API path for OSM data, add CORS here
+/api/*
+  Access-Control-Allow-Origin: *
+  Access-Control-Allow-Methods: GET
