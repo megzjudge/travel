@@ -1271,13 +1271,12 @@ function getCategoryAndIcon(length) {
     if (!isNaN(parsed)) {
       days = parsed;
     } else {
-      category = length.toLowerCase().replace(/\b\w/g, l => l.toUpperCase());
+      category = length.toLowerCase().replace(/\b\w/g, (l) => l.toUpperCase());
       const validCategories = ['Layover', 'Popped In', 'Chilled Out', 'Buzzed Around', 'Medium Stay', 'Long Stay'];
-      if (!validCategories.includes(category)) {
-        category = 'Long Stay';
-      }
+      if (!validCategories.includes(category)) category = 'Long Stay';
+
       const categoryDays = {
-        'Layover': 0.25,
+        Layover: 0.25,
         'Popped In': 2,
         'Chilled Out': 15,
         'Buzzed Around': 60,
@@ -1296,11 +1295,11 @@ function getCategoryAndIcon(length) {
     else if (days <= 210) category = 'medium stay';
     else category = 'long stay';
 
-    category = category.replace(/\b\w/g, l => l.toUpperCase());
+    category = category.replace(/\b\w/g, (l) => l.toUpperCase());
   }
 
   const iconMap = {
-    'layover': 'images/icons/layover_icon.png',
+    layover: 'images/icons/layover_icon.png',
     'popped in': 'images/icons/popped_in_icon.png',
     'chilled out': 'images/icons/chilled_out_icon.png',
     'buzzed around': 'images/icons/buzzed_around_icon.png',
@@ -1310,7 +1309,7 @@ function getCategoryAndIcon(length) {
 
   const iconUrl = iconMap[category.toLowerCase()] || 'images/location_icon.png';
   const icon = L.icon({
-    iconUrl: iconUrl,
+    iconUrl,
     iconSize: [55, 55],
     iconAnchor: [27, 55],
     popupAnchor: [0, -55]
@@ -1319,7 +1318,9 @@ function getCategoryAndIcon(length) {
   return { category, days, icon };
 }
 
+// ------------------------------
 // Initialize the map
+// ------------------------------
 const map = L.map('map', { worldCopyJump: true }).setView([0, 0], 3);
 
 // Create panes for overlay order control
@@ -1346,8 +1347,7 @@ const railwayOverlay = L.tileLayer('https://tiles.openrailwaymap.org/standard/{z
 });
 
 const osmLabelsOverlay = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  attribution:
-    '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
   maxZoom: 19,
   opacity: 0.7
 });
@@ -1359,51 +1359,337 @@ const waterOverlay = L.tileLayer('https://tiles.openseamap.org/seamark/{z}/{x}/{
   opacity: 0.6
 });
 
-// Create layer groups for marker categories
+// ------------------------------
+// Marker layer groups
+// ------------------------------
 const markerLayers = {
-  "Layover - 0-0.5 days": L.layerGroup(),
-  "Popped In - 1-3 days": L.layerGroup(),
-  "Chilled Out - 3-30 days": L.layerGroup(),
-  "Buzzed Around - 1-4 months": L.layerGroup(),
-  "Medium Stay - 4-7 months": L.layerGroup(),
-  "Long Stay - 7+ months": L.layerGroup()
+  'Layover - 0-0.5 days': L.layerGroup(),
+  'Popped In - 1-3 days': L.layerGroup(),
+  'Chilled Out - 3-30 days': L.layerGroup(),
+  'Buzzed Around - 1-4 months': L.layerGroup(),
+  'Medium Stay - 4-7 months': L.layerGroup(),
+  'Long Stay - 7+ months': L.layerGroup()
 };
 
-// Create per-journey layer groups (each becomes its own checkbox)
+// ------------------------------
+// Journey layer groups
+// ------------------------------
 const journeyLayersByName = {};
-trips.forEach(t => {
+trips.forEach((t) => {
   if (!t.name) return;
   journeyLayersByName[t.name] = L.layerGroup();
 });
 
-// Create a layer group for polygons (areas)
+// ------------------------------
+// Polygons
+// ------------------------------
 const polygonLayerGroup = L.layerGroup();
 
-// Add overlays with icons for marker layers
+// ------------------------------------
+// Extra “cool maps” overlays
+// (Leaflet-Providers + Esri-Leaflet)
+// ------------------------------------
+const HAS_PROVIDERS = !!(L.tileLayer && typeof L.tileLayer.provider === 'function');
+const HAS_ESRI = !!(L.esri && (L.esri.dynamicMapLayer || L.esri.imageMapLayer || L.esri.featureLayer));
+
+const JAWG_KEY = 'REPLACE_WITH_JAWG_KEY';
+const THUNDERFOREST_KEY = 'REPLACE_WITH_THUNDERFOREST_KEY';
+
+// Provider overlays (only if leaflet-providers is loaded)
+const overlay_WaymarkedSlopes = HAS_PROVIDERS ? L.tileLayer.provider('WaymarkedTrails.slopes', { opacity: 0.85 }) : null;
+const overlay_WaymarkedCycling = HAS_PROVIDERS ? L.tileLayer.provider('WaymarkedTrails.cycling', { opacity: 0.85 }) : null;
+const overlay_WaymarkedHiking = HAS_PROVIDERS ? L.tileLayer.provider('WaymarkedTrails.hiking', { opacity: 0.85 }) : null;
+
+const overlay_StamenTerrainLines = HAS_PROVIDERS ? L.tileLayer.provider('Stadia.StamenTerrainLines', { opacity: 0.9 }) : null;
+
+const overlay_CartoDarkMatter = HAS_PROVIDERS ? L.tileLayer.provider('CartoDB.DarkMatter', { opacity: 0.85 }) : null;
+
+const overlay_EsriOcean = HAS_PROVIDERS ? L.tileLayer.provider('Esri.OceanBasemap', { opacity: 1.0 }) : null;
+const overlay_EsriNatGeo = HAS_PROVIDERS ? L.tileLayer.provider('Esri.NatGeoWorldMap', { opacity: 1.0 }) : null;
+
+const overlay_OpenTopoMap = HAS_PROVIDERS ? L.tileLayer.provider('OpenTopoMap', { opacity: 0.9 }) : null;
+
+const overlay_JawgMatrix = HAS_PROVIDERS
+  ? L.tileLayer.provider('Jawg.Matrix', { opacity: 0.9, apikey: JAWG_KEY })
+  : null;
+
+const overlay_ThunderforestSpinal = HAS_PROVIDERS
+  ? L.tileLayer.provider('Thunderforest.SpinalMap', { opacity: 0.9, apikey: THUNDERFOREST_KEY })
+  : null;
+
+// NASAGIBS night lights
+const overlay_ViirsEarthAtNight2012 = HAS_PROVIDERS
+  ? L.tileLayer.provider('NASAGIBS.ViirsEarthAtNight2012', { opacity: 0.75 })
+  : null;
+
+// NOAA / NCEI ArcGIS overlays (Esri-Leaflet)
+const overlay_NOAA_MultibeamMosaic = HAS_ESRI
+  ? L.esri.imageMapLayer({
+      url: 'https://gis.ngdc.noaa.gov/arcgis/rest/services/multibeam_mosaic/ImageServer',
+      opacity: 0.6
+    })
+  : null;
+
+// ------------------------------
+// Hazards (split by year) + rules
+// ------------------------------
+let hazards = null;
+
+if (!HAS_ESRI) {
+  console.warn('Esri Leaflet (L.esri) not found. Include esri-leaflet.js to enable Hazards + ArcGIS Online item layers.');
+} else {
+  const HAZARDS_URL = 'https://gis.ngdc.noaa.gov/arcgis/rest/services/web_mercator/hazards/MapServer';
+
+  // Use dynamicMapLayer so we can filter by YEAR with layerDefs and keep server symbology
+  function hazardsLayer(layerId, where = null, opacity = 0.85) {
+    const opts = {
+      url: HAZARDS_URL,
+      layers: [layerId],
+      opacity
+    };
+    if (where) opts.layerDefs = { [layerId]: where };
+    return L.esri.dynamicMapLayer(opts);
+  }
+
+  // These are ArcGIS SQL filters. (NCEI stores BCE as negative years in many services.)
+  const WHERE_1850 = 'YEAR >= 1850';
+  const WHERE_2150_BC = 'YEAR >= -2150';
+
+  hazards = {
+    // events
+    tsu_1850: hazardsLayer(0, WHERE_1850),
+    eq_1850: hazardsLayer(5, WHERE_1850),
+    vol_1850: hazardsLayer(6, WHERE_1850),
+
+    tsu_2150bc: hazardsLayer(0, WHERE_2150_BC),
+    eq_2150bc: hazardsLayer(5, WHERE_2150_BC),
+    vol_2150bc: hazardsLayer(6, WHERE_2150_BC),
+
+    // support layers
+    volcanoLocations: hazardsLayer(7, null, 0.95),
+    plateBoundaries: hazardsLayer(12, null, 0.95)
+  };
+
+  let volcanoLocationsAuto = false;
+
+  function anyVolcanicEventsOn() {
+    return map.hasLayer(hazards.vol_1850) || map.hasLayer(hazards.vol_2150bc);
+  }
+
+  function ensureVolcanoLocationsRule() {
+    if (anyVolcanicEventsOn()) {
+      if (!map.hasLayer(hazards.volcanoLocations)) {
+        hazards.volcanoLocations.addTo(map);
+        volcanoLocationsAuto = true;
+      }
+    } else {
+      if (volcanoLocationsAuto && map.hasLayer(hazards.volcanoLocations)) {
+        map.removeLayer(hazards.volcanoLocations);
+      }
+      volcanoLocationsAuto = false;
+    }
+  }
+
+  map.on('overlayadd', (e) => {
+    if (e.layer === hazards.vol_1850 || e.layer === hazards.vol_2150bc) {
+      ensureVolcanoLocationsRule();
+    }
+  });
+
+  map.on('overlayremove', (e) => {
+    if (e.layer === hazards.vol_1850 || e.layer === hazards.vol_2150bc) {
+      ensureVolcanoLocationsRule();
+    }
+  });
+}
+
+// ------------------------------
+// ArcGIS Online item helper (for your missing ArcGIS item + declination, once you have item ids)
+// ------------------------------
+async function createEsriLayerFromArcGISOnlineItem(itemId, options = {}) {
+  if (!HAS_ESRI) return null;
+
+  const base = 'https://www.arcgis.com/sharing/rest/content/items/';
+  const itemUrl = `${base}${encodeURIComponent(itemId)}?f=pjson`;
+
+  const res = await fetch(itemUrl);
+  if (!res.ok) {
+    console.warn('ArcGIS item fetch failed:', itemId, res.status);
+    return null;
+  }
+  const item = await res.json();
+
+  // Common fields:
+  // - item.url (FeatureServer/MapServer/ImageServer)
+  // - item.type (Feature Service, Map Service, Image Service, Vector Tile Service, Tile Service)
+  const url = item.url;
+  if (!url) {
+    console.warn('ArcGIS item has no `url` (might be a Web Map / Web Scene):', itemId, item.type);
+    return null;
+  }
+
+  const opacity = typeof options.opacity === 'number' ? options.opacity : 0.8;
+
+  // Heuristics by URL
+  if (url.includes('/FeatureServer')) {
+    // default to all features; user can refine later
+    return L.esri.featureLayer({ url, opacity });
+  }
+  if (url.includes('/MapServer')) {
+    return L.esri.dynamicMapLayer({ url, opacity });
+  }
+  if (url.includes('/ImageServer')) {
+    return L.esri.imageMapLayer({ url, opacity });
+  }
+
+  // As a fallback, try dynamic
+  try {
+    return L.esri.dynamicMapLayer({ url, opacity });
+  } catch (e) {
+    console.warn('Could not create Esri layer from:', itemId, url, e);
+    return null;
+  }
+}
+
+// ------------------------------
+// Overlays object (single source of truth)
+// ------------------------------
 const overlays = {
-  "Labels": osmLabelsOverlay,
-  "Railways": railwayOverlay,
-  "Waterways": waterOverlay,
-  "Areas": polygonLayerGroup,
-  "<img src='images/icons/layover_icon.png' style='width:20px; height:20px; margin-right:5px; vertical-align:middle;'>Layover - 0-0.5 days":
-    markerLayers["Layover - 0-0.5 days"],
-  "<img src='images/icons/popped_in_icon.png' style='width:20px; height:20px; margin-right:5px; vertical-align:middle;'>Popped In - 1-3 days":
-    markerLayers["Popped In - 1-3 days"],
-  "<img src='images/icons/chilled_out_icon.png' style='width:20px; height:20px; margin-right:5px; vertical-align:middle;'>Chilled Out - 3-30 days":
-    markerLayers["Chilled Out - 3-30 days"],
-  "<img src='images/icons/buzzed_around_icon.png' style='width:20px; height:20px; margin-right:5px; vertical-align:middle;'>Buzzed Around - 1-4 months":
-    markerLayers["Buzzed Around - 1-4 months"],
-  "<img src='images/icons/medium_stay_icon.png' style='width:20px; height:20px; margin-right:5px; vertical-align:middle;'>Medium Stay - 4-7 months":
-    markerLayers["Medium Stay - 4-7 months"],
-  "<img src='images/icons/long_stay_icon.png' style='width:20px; height:20px; margin-right:5px; vertical-align:middle;'>Long Stay - 7+ months":
-    markerLayers["Long Stay - 7+ months"]
+  "Areas": polygonLayerGroup, // https://leaflet-extras.github.io/leaflet-providers/preview/
+  "Labels": osmLabelsOverlay, // https://leaflet-extras.github.io/leaflet-providers/preview/
+  ...(overlay_EsriNatGeo ? { "Labels (all en)": overlay_EsriNatGeo } : {}), // https://leaflet-extras.github.io/leaflet-providers/preview/
+  "Railways": railwayOverlay, // https://leaflet-extras.github.io/leaflet-providers/preview/
+  "Waterways": waterOverlay, // https://leaflet-extras.github.io/leaflet-providers/preview/
+  ...(overlay_WaymarkedSlopes ? { "Slopes": overlay_WaymarkedSlopes } : {}), // https://leaflet-extras.github.io/leaflet-providers/preview/
+  ...(overlay_WaymarkedCycling ? { "Cycling": overlay_WaymarkedCycling } : {}), // https://leaflet-extras.github.io/leaflet-providers/preview/
+  ...(overlay_WaymarkedHiking ? { "Hiking": overlay_WaymarkedHiking } : {}), // https://leaflet-extras.github.io/leaflet-providers/preview/
+  ...(overlay_OpenTopoMap ? { "Elevation": overlay_OpenTopoMap } : {}), // https://leaflet-extras.github.io/leaflet-providers/preview/
+  ...(overlay_EsriOcean ? { "Seafloor": overlay_EsriOcean } : {}), // https://leaflet-extras.github.io/leaflet-providers/preview/
+  ...(overlay_NOAA_MultibeamMosaic ? { "Ocean Depth": overlay_NOAA_MultibeamMosaic } : {}), // https://www.ncei.noaa.gov/maps/bathymetry/
+  ...(overlay_CartoDarkMatter ? { "Dark": overlay_CartoDarkMatter } : {}), // https://leaflet-extras.github.io/leaflet-providers/preview/
+  ...(overlay_ViirsEarthAtNight2012 ? { "Lights 2012": overlay_ViirsEarthAtNight2012 } : {}) // https://leaflet-extras.github.io/leaflet-providers/preview/
 };
 
+// Append Hazards (split exactly as you described)
+if (hazards) {
+  overlays["Volcanos"] = hazards.volcanoLocations; // https://www.ncei.noaa.gov/maps/hazards/
+  overlays["Plates"] = hazards.plateBoundaries; // https://www.ncei.noaa.gov/maps/hazards/
+  overlays["Tsunamis (1850+)"] = hazards.tsu_1850; // https://www.ncei.noaa.gov/maps/hazards/
+  overlays["Earthquakes (1850+)"] = hazards.eq_1850; // https://www.ncei.noaa.gov/maps/hazards/
+  overlays["Volcanos (1850+)"] = hazards.vol_1850; // https://www.ncei.noaa.gov/maps/hazards/
+  overlays["Tsunamis (2150 BC+)"] = hazards.tsu_2150bc; // https://www.ncei.noaa.gov/maps/hazards/
+  overlays["Earthquakes (2150 BC+)"] = hazards.eq_2150bc; // https://www.ncei.noaa.gov/maps/hazards/
+  overlays["Volcanos (2150 BC+)"] = hazards.vol_2150bc; // https://www.ncei.noaa.gov/maps/hazards/
+}
+
+// Marker overlays with icons (keep exactly as you had)
+Object.assign(overlays, {
+  "<img src='images/icons/layover_icon.png' style='width:20px; height:20px; margin-right:5px; vertical-align:middle;'>Layover - 0-0.5 days":
+    markerLayers['Layover - 0-0.5 days'],
+  "<img src='images/icons/popped_in_icon.png' style='width:20px; height:20px; margin-right:5px; vertical-align:middle;'>Popped In - 1-3 days":
+    markerLayers['Popped In - 1-3 days'],
+  "<img src='images/icons/chilled_out_icon.png' style='width:20px; height:20px; margin-right:5px; vertical-align:middle;'>Chilled Out - 3-30 days":
+    markerLayers['Chilled Out - 3-30 days'],
+  "<img src='images/icons/buzzed_around_icon.png' style='width:20px; height:20px; margin-right:5px; vertical-align:middle;'>Buzzed Around - 1-4 months":
+    markerLayers['Buzzed Around - 1-4 months'],
+  "<img src='images/icons/medium_stay_icon.png' style='width:20px; height:20px; margin-right:5px; vertical-align:middle;'>Medium Stay - 4-7 months":
+    markerLayers['Medium Stay - 4-7 months'],
+  "<img src='images/icons/long_stay_icon.png' style='width:20px; height:20px; margin-right:5px; vertical-align:middle;'>Long Stay - 7+ months":
+    markerLayers['Long Stay - 7+ months']
+});
+
+// Journeys as checkboxes
 Object.entries(journeyLayersByName).forEach(([name, layer]) => {
   overlays[name] = layer;
 });
 
-L.control.layers(null, overlays).addTo(map);
+// Create layer control ONCE (after overlays is complete)
+const layerControl = L.control.layers(null, overlays).addTo(map);
+
+// ------------------------------
+// Headers in layer control: Overlays, Markers, Journeys
+// ------------------------------
+function addSectionHeaderToLayerControl({ className, title, findInsertBeforeLabel }) {
+  const control = document.querySelector('.leaflet-control-layers');
+  if (!control) return;
+
+  if (control.querySelector(`.${className}`)) return;
+
+  const list = control.querySelector('.leaflet-control-layers-overlays');
+  if (!list) return;
+
+  const labels = Array.from(list.querySelectorAll('label'));
+  const anchor = findInsertBeforeLabel(labels);
+  if (!anchor) return;
+
+  const header = document.createElement('div');
+  header.className = className;
+  header.textContent = title;
+  header.style.cssText = `
+    margin: 8px 0 6px;
+    padding-top: 6px;
+    font-weight: 700;
+    font-size: 12px;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    opacity: 0.9;
+    border-top: 1px solid rgba(255,255,255,0.35);
+  `;
+
+  list.insertBefore(header, anchor);
+}
+
+function addOverlaysHeaderToLayerControl() {
+  addSectionHeaderToLayerControl({
+    className: 'overlays-section-header',
+    title: 'Overlays',
+    findInsertBeforeLabel: (labels) => {
+      // Insert before the first “overlay” label (Areas is a safe anchor)
+      const overlayAnchors = ['Areas', 'Labels', 'Railways', 'Waterways', 'Slopes', 'Cycling', 'Hiking'];
+      return labels.find((l) => overlayAnchors.includes((l.textContent || '').trim()));
+    }
+  });
+}
+
+function addMarkersHeaderToLayerControl() {
+  addSectionHeaderToLayerControl({
+    className: 'markers-section-header',
+    title: 'Markers',
+    findInsertBeforeLabel: (labels) => {
+      const markerTexts = [
+        'Layover - 0-0.5 days',
+        'Popped In - 1-3 days',
+        'Chilled Out - 3-30 days',
+        'Buzzed Around - 1-4 months',
+        'Medium Stay - 4-7 months',
+        'Long Stay - 7+ months'
+      ];
+      return labels.find((l) => markerTexts.includes((l.textContent || '').trim()));
+    }
+  });
+}
+
+function addJourneysHeaderToLayerControl() {
+  addSectionHeaderToLayerControl({
+    className: 'journeys-section-header',
+    title: 'Journeys',
+    findInsertBeforeLabel: (labels) => {
+      const journeyNames = Object.keys(journeyLayersByName);
+      if (!journeyNames.length) return null;
+      return labels.find((l) => journeyNames.includes((l.textContent || '').trim()));
+    }
+  });
+}
+
+function refreshLayerControlHeaders() {
+  addOverlaysHeaderToLayerControl();
+  addMarkersHeaderToLayerControl();
+  addJourneysHeaderToLayerControl();
+}
+
+// Run now and after Leaflet builds internals
+refreshLayerControlHeaders();
+setTimeout(refreshLayerControlHeaders, 0);
 
 // ------------------------------
 // Auto-toggle Areas on zoom
@@ -1450,7 +1736,7 @@ function injectLayerHintCSS() {
 }
 
 function removeLayerHint() {
-  document.querySelectorAll('.layer-hint-pulse').forEach(n => n.remove());
+  document.querySelectorAll('.layer-hint-pulse').forEach((n) => n.remove());
   if (layerHintTimer) clearTimeout(layerHintTimer);
   layerHintTimer = null;
 }
@@ -1474,15 +1760,14 @@ function showLayerHint() {
   const pulse = document.createElement('div');
   pulse.className = 'layer-hint-pulse';
   pulse.style.left = `${cRect.left - mapRect.left - 6}px`;
-  pulse.style.top  = `${cRect.top  - mapRect.top  - 6}px`;
-  pulse.style.width  = `${cRect.width + 12}px`;
+  pulse.style.top = `${cRect.top - mapRect.top - 6}px`;
+  pulse.style.width = `${cRect.width + 12}px`;
   pulse.style.height = `${cRect.height + 12}px`;
 
   mapEl.appendChild(pulse);
   layerHintTimer = setTimeout(removeLayerHint, LAYER_HINT_MS);
 }
 
-// Show AFTER zoom finishes, only when zooming in past a threshold (once)
 const HINT_ZOOM = 6;
 let prevZoom = map.getZoom();
 let hintShownOnce = false;
@@ -1495,14 +1780,12 @@ map.on('zoomend', () => {
     setTimeout(showLayerHint, 250);
     hintShownOnce = true;
   }
-
   prevZoom = z;
 });
 
 // ------------------------------
 // Bearings / path sampling helpers
 // ------------------------------
-
 function calculateBearing(start, end) {
   const toRad = Math.PI / 180;
   const toDeg = 180 / Math.PI;
@@ -1512,15 +1795,12 @@ function calculateBearing(start, end) {
   const dLon = (end.lng - start.lng) * toRad;
 
   const y = Math.sin(dLon) * Math.cos(lat2);
-  const x =
-    Math.cos(lat1) * Math.sin(lat2) -
-    Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
+  const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
 
   const brng = Math.atan2(y, x) * toDeg;
   return (brng + 360) % 360;
 }
 
-// unwrap longitudes so line + arrows stay on the same world copy
 function unwrapLngs(startLL, endLL) {
   let sLng = startLL.lng;
   let eLng = endLL.lng;
@@ -1529,15 +1809,11 @@ function unwrapLngs(startLL, endLL) {
   if (d > 180) eLng -= 360;
   if (d < -180) eLng += 360;
 
-  return {
-    start: L.latLng(startLL.lat, sLng),
-    end: L.latLng(endLL.lat, eLng)
-  };
+  return { start: L.latLng(startLL.lat, sLng), end: L.latLng(endLL.lat, eLng) };
 }
 
 function sampleQuadraticBezierProjected(map, startLL, controlLL, endLL, steps = 240) {
   const z = 0;
-
   const s = map.project(startLL, z);
   const c = map.project(controlLL, z);
   const e = map.project(endLL, z);
@@ -1547,15 +1823,8 @@ function sampleQuadraticBezierProjected(map, startLL, controlLL, endLL, steps = 
     const t = i / steps;
     const oneMinusT = 1 - t;
 
-    const x =
-      oneMinusT * oneMinusT * s.x +
-      2 * oneMinusT * t * c.x +
-      t * t * e.x;
-
-    const y =
-      oneMinusT * oneMinusT * s.y +
-      2 * oneMinusT * t * c.y +
-      t * t * e.y;
+    const x = oneMinusT * oneMinusT * s.x + 2 * oneMinusT * t * c.x + t * t * e.x;
+    const y = oneMinusT * oneMinusT * s.y + 2 * oneMinusT * t * c.y + t * t * e.y;
 
     pts.push(map.unproject(L.point(x, y), z));
   }
@@ -1575,7 +1844,6 @@ function pointAtDistanceAlong(pts, cum, distMeters) {
   if (total <= 0) return { latLng: pts[0], idx: 0 };
 
   const d = Math.max(0, Math.min(distMeters, total));
-
   let i = 1;
   while (i < cum.length && cum[i] < d) i++;
 
@@ -1612,7 +1880,7 @@ function offsetLatLngPerpendicularPx(map, latLng, screenAngleRad, offsetPx) {
   const p = map.project(latLng, z);
 
   const nx = -Math.sin(screenAngleRad);
-  const ny =  Math.cos(screenAngleRad);
+  const ny = Math.cos(screenAngleRad);
 
   const pOff = L.point(p.x + nx * offsetPx, p.y + ny * offsetPx);
   return map.unproject(pOff, z);
@@ -1629,10 +1897,9 @@ function easeOut(t) {
 // ------------------------------
 // Color helpers (gradient stroke)
 // ------------------------------
-
 function hexToRgb(hex) {
   const h = hex.replace('#', '').trim();
-  const full = h.length === 3 ? h.split('').map(ch => ch + ch).join('') : h;
+  const full = h.length === 3 ? h.split('').map((ch) => ch + ch).join('') : h;
   const n = parseInt(full, 16);
   return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
 }
@@ -1656,14 +1923,13 @@ function lerpColorHex(fromHex, toHex, t) {
   });
 }
 
-function lightenHex(hex, amount = 0.80) {
+function lightenHex(hex, amount = 0.8) {
   return lerpColorHex(hex, '#FFFFFF', amount);
 }
 
 // ------------------------------
-// Trip line creation (curve + arrows + emoji + GRADIENT LINE + hover jump labels)
+// Trip line creation
 // ------------------------------
-
 function arrowSpacingForZoom(z) {
   if (z <= 3) return 1200000;
   if (z === 4) return 800000;
@@ -1672,37 +1938,23 @@ function arrowSpacingForZoom(z) {
   return 150000;
 }
 
-function createTripLine(
-  startLatLng,
-  endLatLng,
-  startName,
-  endName,
-  mode = 'plane',
-  startColor = 'red',
-  endColor = null,
-  jumpNumber = 1
-) {
+function createTripLine(startLatLng, endLatLng, startName, endName, mode = 'plane', startColor = 'red', endColor = null, jumpNumber = 1) {
   const { start: sLL, end: eLL } = unwrapLngs(startLatLng, endLatLng);
 
   const midLat = (sLL.lat + eLL.lat) / 2;
   const midLng = (sLL.lng + eLL.lng) / 2;
-
   const controlPoint = L.latLng(midLat + 2, midLng);
 
-  const useCurve = (typeof L.curve === 'function');
-  const samplePts = useCurve
-    ? sampleQuadraticBezierProjected(map, sLL, controlPoint, eLL, 240)
-    : [sLL, eLL];
+  const useCurve = typeof L.curve === 'function';
+  const samplePts = useCurve ? sampleQuadraticBezierProjected(map, sLL, controlPoint, eLL, 240) : [sLL, eLL];
 
   const cum = cumulativeDistances(map, samplePts);
   const totalLength = cum[cum.length - 1];
 
   const _startColor = startColor;
-  const _endColor = endColor ?? lightenHex(startColor, 0.80);
+  const _endColor = endColor ?? lightenHex(startColor, 0.8);
 
   const label = `Jump ${jumpNumber}: ${startName} → ${endName} (${mode})`;
-
-  // Prepare emoji marker (created later, but referenced by hover handlers)
   let transportMarker = null;
 
   const lineLayers = [];
@@ -1713,7 +1965,6 @@ function createTripLine(
     const tt = easeOut(t);
     const segColor = lerpColorHex(_startColor, _endColor, tt);
 
-    // white shadow underlay
     const shadow = L.polyline([samplePts[i], samplePts[i + 1]], {
       color: '#ffffff',
       weight: 7,
@@ -1723,20 +1974,14 @@ function createTripLine(
       pane: 'tripShadowPane'
     });
     shadow.bindTooltip(label, { sticky: true, direction: 'top', opacity: 0.95 });
-
-    shadow.on('mouseover', () => {
-      if (transportMarker) transportMarker.setOpacity(1);
-    });
+    shadow.on('mouseover', () => transportMarker && transportMarker.setOpacity(1));
     shadow.on('mouseout', () => {
-      if (transportMarker) {
-        transportMarker.setOpacity(0);
-        transportMarker.closeTooltip();
-      }
+      if (!transportMarker) return;
+      transportMarker.setOpacity(0);
+      transportMarker.closeTooltip();
     });
-
     lineLayers.push(shadow);
 
-    // main colored segment
     const seg = L.polyline([samplePts[i], samplePts[i + 1]], {
       color: segColor,
       weight: 3,
@@ -1746,27 +1991,19 @@ function createTripLine(
       pane: 'tripPane'
     });
     seg.bindTooltip(label, { sticky: true, direction: 'top', opacity: 0.95 });
-
-    seg.on('mouseover', () => {
-      if (transportMarker) transportMarker.setOpacity(1);
-    });
+    seg.on('mouseover', () => transportMarker && transportMarker.setOpacity(1));
     seg.on('mouseout', () => {
-      if (transportMarker) {
-        transportMarker.setOpacity(0);
-        transportMarker.closeTooltip();
-      }
+      if (!transportMarker) return;
+      transportMarker.setOpacity(0);
+      transportMarker.closeTooltip();
     });
-
     lineLayers.push(seg);
   }
 
-  // Hide BOTH arrows + emoji when zoomed out
+  // Hide arrows + emoji when zoomed out
   const z = map.getZoom();
-  if (z <= 3) {
-    return { lineLayers, arrowMarkers: [], transportMarker: null };
-  }
+  if (z <= 3) return { lineLayers, arrowMarkers: [], transportMarker: null };
 
-  // Arrows
   const spacingMeters = arrowSpacingForZoom(z);
   const arrowCount = Math.max(1, Math.floor(totalLength / spacingMeters));
   const arrowMarkers = [];
@@ -1799,40 +2036,26 @@ function createTripLine(
 
     const m = L.marker(latLng, { icon: arrowIcon, pane: 'tripPane' });
     m.bindTooltip(label, { sticky: true, direction: 'top', opacity: 0.95 });
-
-    // (optional) hovering arrows also reveals emoji
-    m.on('mouseover', () => {
-      if (transportMarker) transportMarker.setOpacity(1);
-    });
+    m.on('mouseover', () => transportMarker && transportMarker.setOpacity(1));
     m.on('mouseout', () => {
-      if (transportMarker) {
-        transportMarker.setOpacity(0);
-        transportMarker.closeTooltip();
-      }
+      if (!transportMarker) return;
+      transportMarker.setOpacity(0);
+      transportMarker.closeTooltip();
     });
 
     arrowMarkers.push(m);
   }
 
-  // Transport emoji
-  const transportEmojis = {
-    plane: '✈️',
-    train: '🚂',
-    car: '🚗',
-    boat: '🛥️',
-    van: '🚐',
-  };
+  const transportEmojis = { plane: '✈️', train: '🚂', car: '🚗', boat: '🛥️', van: '🚐' };
   const emoji = transportEmojis[mode] || '✈️';
 
   const midByDistance = totalLength * 0.5;
   const midPos = pointAtDistanceAlong(samplePts, cum, midByDistance);
-
   const midBearing = localBearingFromSample(samplePts, midPos.idx);
   const transportCssDeg = bearingToCssRotationDeg(midBearing + 180);
 
-  // Offset emoji "next to" the line
   const zNow = map.getZoom();
-  const px = (zNow >= 10) ? 20 : (zNow >= 7 ? 16 : 12);
+  const px = zNow >= 10 ? 20 : zNow >= 7 ? 16 : 12;
   const ang = screenAngleAtSample(map, samplePts, midPos.idx);
   const emojiLatLng = offsetLatLngPerpendicularPx(map, midPos.latLng, ang, px);
 
@@ -1854,14 +2077,8 @@ function createTripLine(
   });
 
   transportMarker = L.marker(emojiLatLng, { icon: transportIcon, pane: 'tripPane' });
-
-  // Hidden until hover
   transportMarker.setOpacity(0);
-
-  // Emoji tooltip uses same label
   transportMarker.bindTooltip(label, { sticky: true, direction: 'top', opacity: 0.95 });
-
-  // Hovering emoji shows itself + tooltip
   transportMarker.on('mouseover', () => {
     transportMarker.setOpacity(1);
     transportMarker.openTooltip();
@@ -1878,7 +2095,7 @@ function createTripLine(
 // Location map (jumpId -> latLng + name)
 // ------------------------------
 const locationMap = {};
-locations.forEach(location => {
+locations.forEach((location) => {
   if (location.lat && location.lon && location.jumpId) {
     locationMap[location.jumpId] = {
       latLng: L.latLng(location.lat, location.lon),
@@ -1888,14 +2105,13 @@ locations.forEach(location => {
 });
 
 // Clear previous layers before adding new ones to avoid duplication
-Object.values(markerLayers).forEach(layerGroup => layerGroup.clearLayers());
+Object.values(markerLayers).forEach((layerGroup) => layerGroup.clearLayers());
 
 // Add markers to their layer groups
-locations.forEach(location => {
+locations.forEach((location) => {
   if (location.lat && location.lon) {
     const { category, days, icon } = getCategoryAndIcon(location.length);
     const marker = L.marker([location.lat, location.lon], { icon });
-    console.log(`Marker added for ${location.name} (${category})`);
 
     marker.bindPopup(`
       <b>${location.name}</b><br>
@@ -1903,7 +2119,7 @@ locations.forEach(location => {
       ${location.countryName} (${location.countryCode})<br>
       <span title="Exact length: ${days} days">Category: ${category}</span><br>
       Lat: ${location.lat}, Lon: ${location.lon}<br>
-      <button id="zoom-btn-${location.name.replace(/\s+/g, '-')}">Zoom Here</button> 
+      <button id="zoom-btn-${location.name.replace(/\s+/g, '-')}">Zoom Here</button>
       <button id="zoom-out-btn-${location.name.replace(/\s+/g, '-')}">Zoom Out</button>
     `);
 
@@ -1915,9 +2131,7 @@ locations.forEach(location => {
       let imageHtml = '';
 
       if (showDetails && Array.isArray(location.image) && location.image.length > 0) {
-        imageHtml = location.image
-          .map(img => `<img src="${img}" width="100" style="margin: 5px 0;"><br>`)
-          .join('');
+        imageHtml = location.image.map((img) => `<img src="${img}" width="100" style="margin: 5px 0;"><br>`).join('');
       }
 
       const popupContent = `
@@ -1928,10 +2142,12 @@ locations.forEach(location => {
         Lat: ${location.lat}, Lon: ${location.lon}<br>
         ${imageHtml}
         ${showDetails && location.text ? `${location.text}<br>` : ''}
-        ${showDetails && location.urls
-          ? location.urls.map(link => `<a href="${link.url}" target="_blank">${link.text}</a>`).join(' | ') + '<br>'
-          : ''}
-        <button id="zoom-btn-${location.name.replace(/\s+/g, '-')}">Zoom Here</button> 
+        ${
+          showDetails && location.urls
+            ? location.urls.map((link) => `<a href="${link.url}" target="_blank">${link.text}</a>`).join(' | ') + '<br>'
+            : ''
+        }
+        <button id="zoom-btn-${location.name.replace(/\s+/g, '-')}">Zoom Here</button>
         <button id="zoom-out-btn-${location.name.replace(/\s+/g, '-')}">Zoom Out</button>
       `;
       marker.setPopupContent(popupContent);
@@ -1954,27 +2170,24 @@ locations.forEach(location => {
       }
     });
 
-    const layerKey = Object.keys(markerLayers).find(key => key.startsWith(category));
-    if (layerKey) {
-      markerLayers[layerKey].addLayer(marker);
-    }
+    const layerKey = Object.keys(markerLayers).find((key) => key.startsWith(category));
+    if (layerKey) markerLayers[layerKey].addLayer(marker);
   }
 });
 
 // ------------------------------
-// Create trip lines based on the trips array
+// Trips render
 // ------------------------------
 function renderTrips() {
-  // clear every journey layer
-  Object.values(journeyLayersByName).forEach(layer => layer.clearLayers());
+  Object.values(journeyLayersByName).forEach((layer) => layer.clearLayers());
 
-  trips.forEach(trip => {
+  trips.forEach((trip) => {
     const group = journeyLayersByName[trip.name];
     if (!group) return;
     if (!Array.isArray(trip.legs) || trip.legs.length === 0) return;
 
     const n = trip.legs.length;
-    const tripEndColor = lightenHex(trip.color, 0.80);
+    const tripEndColor = lightenHex(trip.color, 0.8);
 
     trip.legs.forEach((leg, legIndex) => {
       const startData = locationMap[leg.from];
@@ -1996,20 +2209,18 @@ function renderTrips() {
         leg.mode,
         legStartColor,
         legEndColor,
-        legIndex + 1 // jump number
+        legIndex + 1
       );
 
-      if (Array.isArray(lineLayers)) lineLayers.forEach(seg => group.addLayer(seg));
-      if (Array.isArray(arrowMarkers)) arrowMarkers.forEach(m => group.addLayer(m));
+      if (Array.isArray(lineLayers)) lineLayers.forEach((seg) => group.addLayer(seg));
+      if (Array.isArray(arrowMarkers)) arrowMarkers.forEach((m) => group.addLayer(m));
       if (transportMarker) group.addLayer(transportMarker);
     });
   });
 }
 
-// initial
 renderTrips();
 
-// redraw on zoom (debounced)
 let tripRenderTimer = null;
 map.on('zoomend', () => {
   clearTimeout(tripRenderTimer);
@@ -2017,10 +2228,10 @@ map.on('zoomend', () => {
 });
 
 // Add all marker layer groups to the map by default
-Object.values(markerLayers).forEach(layerGroup => layerGroup.addTo(map));
+Object.values(markerLayers).forEach((layerGroup) => layerGroup.addTo(map));
 
 // ------------------------------
-// --- POLYGON LOGIC ---
+// Polygons load/show by zoom
 // ------------------------------
 const polygonLayers = new Map();
 
@@ -2040,37 +2251,56 @@ async function loadAllPolygons(locations) {
       });
       polygonLayers.set(location.name, layer);
       polygonLayerGroup.addLayer(layer);
-      console.log(`Polygon loaded for ${location.name}`);
     } catch (err) {
       console.error(`Error loading polygon for ${location.name}:`, err);
     }
   }
-
   updatePolygons();
 }
 
 function updatePolygons() {
   const zoom = map.getZoom();
-  locations.forEach(location => {
+  locations.forEach((location) => {
     const layer = polygonLayers.get(location.name);
     if (!layer) return;
+
     if (zoom >= 6) {
-      if (!polygonLayerGroup.hasLayer(layer)) {
-        polygonLayerGroup.addLayer(layer);
-        console.log(`Polygon shown: ${location.name}`);
-      }
+      if (!polygonLayerGroup.hasLayer(layer)) polygonLayerGroup.addLayer(layer);
     } else {
-      if (polygonLayerGroup.hasLayer(layer)) {
-        polygonLayerGroup.removeLayer(layer);
-        console.log(`Polygon hidden: ${location.name}`);
-      }
+      if (polygonLayerGroup.hasLayer(layer)) polygonLayerGroup.removeLayer(layer);
     }
   });
 }
 
 map.on('zoomend', updatePolygons);
-
-// Load all polygons immediately
 loadAllPolygons(locations);
 
-console.log('Map loaded with categorized markers, toggle control, hover jump tooltips (lines/arrows/emoji), per-journey checkboxes, gradient journeys + shadows, and local .json polygons!');
+// ------------------------------
+// Add your missing ArcGIS item overlay(s)
+// ------------------------------
+// 1) The ArcGIS item you gave:
+(async () => {
+  const itemLayer = await createEsriLayerFromArcGISOnlineItem('1aaac59a6076461e8e1380a7195222f6', { opacity: 0.75 });
+  if (itemLayer) {
+    overlays['ArcGIS Item — 1aaac59a…'] = itemLayer;
+    layerControl.addOverlay(itemLayer, 'ArcGIS Item — 1aaac59a…');
+    setTimeout(refreshLayerControlHeaders, 0);
+  }
+})();
+
+// 2) NCEI Historical Declination:
+// The NCEI declination page is a web app; it typically references an ArcGIS Online item/service.
+// Once you identify its ArcGIS item id, add it here in the same way:
+// (Replace DECLINATION_ITEM_ID with the real id.)
+// (async () => {
+//   const declLayer = await createEsriLayerFromArcGISOnlineItem('DECLINATION_ITEM_ID', { opacity: 0.75 });
+//   if (declLayer) {
+//     overlays['Magnetic Declination'] = declLayer;
+//     layerControl.addOverlay(declLayer, 'Magnetic Declination');
+//     setTimeout(refreshLayerControlHeaders, 0);
+//   }
+// })();
+
+console.log(
+  'Map loaded with categorized markers, overlay headers (Overlays/Markers/Journeys), extra overlays, hazards split layers, hover jump tooltips, per-journey checkboxes, gradient journeys + shadows, and local .json polygons.'
+);
