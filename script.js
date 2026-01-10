@@ -1839,6 +1839,10 @@ if (!HAS_ESRI) {
       // Register hazards overlays AFTER hazards finishes async init
       setupHazardsMenu(hazards);
 
+      setTimeout(() => {
+        forcePlaceLabelAfter('Magnetics', 'Earthquakes');
+      }, 0);
+
       // IMPORTANT: Do NOT auto-add any of these to the map.
       // They will be toggled via the layer control.
     } catch (e) {
@@ -1999,6 +2003,40 @@ function moveLabelBefore(labelText, beforeTexts) {
   list.insertBefore(label, anchor);
 }
 
+function moveLabelAfter(labelText, afterText) {
+  const list = getOverlaysListEl();
+  if (!list) return false;
+
+  const label = findLabelByExactText(labelText);
+  const after = findLabelByExactText(afterText);
+
+  if (!label || !after) return false;
+
+  // Insert after the "after" label
+  const next = after.nextSibling;
+  if (next) list.insertBefore(label, next);
+  else list.appendChild(label);
+
+  return true;
+}
+
+function forcePlaceLabelAfter(labelText, afterText, tries = 40, delayMs = 50) {
+  let count = 0;
+
+  const tick = () => {
+    // Rebuild headers first (Leaflet rebuilds this DOM often)
+    refreshLayerControlHeaders();
+
+    const ok = moveLabelAfter(labelText, afterText);
+    if (ok) return;
+
+    count++;
+    if (count < tries) setTimeout(tick, delayMs);
+  };
+
+  tick();
+}
+
 // Add overlay and then force its checkbox DOM node to sit above Markers/Journeys.
 function addOverlayInOverlaysSection(layer, labelText) {
   if (!layer) return;
@@ -2007,14 +2045,26 @@ function addOverlayInOverlaysSection(layer, labelText) {
   layerControl.addOverlay(layer, labelText);
 
   setTimeout(() => {
-    moveLabelBefore(labelText, [
+    const markerFirstLabels = [
       'Layover - 0-0.5 days',
       'Popped In - 1-3 days',
       'Chilled Out - 3-30 days',
       'Buzzed Around - 1-4 months',
       'Medium Stay - 4-7 months',
       'Long Stay - 7+ months'
-    ]);
+    ];
+
+    // If this is a "must be at bottom of overlays" item,
+    // move it to just before the first marker label (i.e., end of overlays section).
+    const overlaysBottomItems = new Set(['Magnetics', 'Magnetic Declination']);
+
+    if (overlaysBottomItems.has(labelText)) {
+      moveLabelBefore(labelText, markerFirstLabels);
+    } else {
+      // Default behaviour: keep overlays above markers by anchoring before the first marker label
+      moveLabelBefore(labelText, markerFirstLabels);
+    }
+
     refreshLayerControlHeaders();
   }, 0);
 }
@@ -2023,11 +2073,19 @@ function addOverlayInOverlaysSection(layer, labelText) {
 // Async overlays (Magnetics / Declination item)
 // ------------------------------
 (async () => { // https://www.arcgis.com/home/item.html?id=1aaac59a6076461e8e1380a7195222f6
-  const itemLayer = await createEsriLayerFromArcGISOnlineItem('1aaac59a6076461e8e1380a7195222f6', { opacity: 0.75 });
+  const itemLayer = await createEsriLayerFromArcGISOnlineItem(
+    '1aaac59a6076461e8e1380a7195222f6',
+    { opacity: 0.75 }
+  );
+
   if (itemLayer) {
     addOverlayInOverlaysSection(itemLayer, 'Magnetics');
+
+    // Hard requirement: Magnetics directly under Earthquakes
+    forcePlaceLabelAfter('Magnetics', 'Earthquakes');
   }
 })();
+
 
 (async () => {
   const DECLINATION_ITEM_ID = 'DECLINATION_ITEM_ID';
