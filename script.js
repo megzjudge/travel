@@ -1384,6 +1384,7 @@ trips.forEach((t) => {
 // Polygons
 // ------------------------------
 const polygonLayerGroup = L.layerGroup();
+const poleShiftGroup = L.layerGroup();
 
 // ------------------------------------
 // Extra “cool maps” overlays
@@ -1431,76 +1432,462 @@ const overlay_NOAA_MultibeamMosaic = HAS_ESRI
   : null;
 
 // ------------------------------
-// Hazards (split by year) + rules
+// Hazards (ALL data) + clickable features + renderer-based symbology
 // ------------------------------
 let hazards = null;
 
 if (!HAS_ESRI) {
-  console.warn('Esri Leaflet (L.esri) not found. Include esri-leaflet.js to enable Hazards + ArcGIS Online item layers.');
+  console.warn('Esri Leaflet (L.esri) not found. Include esri-leaflet.js to enable Hazards layers.');
 } else {
-  const HAZARDS_URL = 'https://gis.ngdc.noaa.gov/arcgis/rest/services/web_mercator/hazards/MapServer';
+  const HAZARDS_BASE = 'https://gis.ngdc.noaa.gov/arcgis/rest/services/web_mercator/hazards/MapServer';
 
-  // Use dynamicMapLayer so we can filter by YEAR with layerDefs and keep server symbology
-  function hazardsLayer(layerId, where = null, opacity = 0.85) {
-    const opts = {
-      url: HAZARDS_URL,
-      layers: [layerId],
-      opacity
-    };
-    if (where) opts.layerDefs = { [layerId]: where };
-    return L.esri.dynamicMapLayer(opts);
-  }
-
-  // These are ArcGIS SQL filters. (NCEI stores BCE as negative years in many services.)
-  const WHERE_1850 = 'YEAR >= 1850';
-  const WHERE_2150_BC = 'YEAR >= -2150';
-
-  hazards = {
-    // events
-    tsu_1850: hazardsLayer(0, WHERE_1850),
-    eq_1850: hazardsLayer(5, WHERE_1850),
-    vol_1850: hazardsLayer(6, WHERE_1850),
-
-    tsu_2150bc: hazardsLayer(0, WHERE_2150_BC),
-    eq_2150bc: hazardsLayer(5, WHERE_2150_BC),
-    vol_2150bc: hazardsLayer(6, WHERE_2150_BC),
-
-    // support layers
-    volcanoLocations: hazardsLayer(7, null, 0.95),
-    plateBoundaries: hazardsLayer(12, null, 0.95)
+  // ---------- small helpers ----------
+  const rgbaToCss = (c) => {
+    if (!Array.isArray(c)) return 'rgba(255,0,0,1)';
+    const [r, g, b, a = 255] = c;
+    return `rgba(${r},${g},${b},${(a / 255).toFixed(3)})`;
   };
 
-  let volcanoLocationsAuto = false;
+  const escapeHtml = (s) =>
+    String(s ?? '')
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#039;');
 
-  function anyVolcanicEventsOn() {
-    return map.hasLayer(hazards.vol_1850) || map.hasLayer(hazards.vol_2150bc);
+  // Allow a small safe subset of tags and make raw URLs clickable.
+  function sanitizePopupHtml(input) {
+    let s = String(input ?? '');
+
+    // Hard-strip script/style blocks
+    s = s.replace(/<\s*script[\s\S]*?>[\s\S]*?<\s*\/\s*script\s*>/gi, '');
+    s = s.replace(/<\s*style[\s\S]*?>[\s\S]*?<\s*\/\s*style\s*>/gi, '');
+
+    // Convert plain URLs to links (before escaping)
+    s = s.replace(
+      /(\bhttps?:\/\/[^\s<>"']+[^\s<>"'.,;:!?(){}\[\]]|\bwww\.[^\s<>"']+[^\s<>"'.,;:!?(){}\[\]]+)/gi,
+      (m) => {
+        const href = m.startsWith('www.') ? `https://${m}` : m;
+        return `<a href="${href}" target="_blank" rel="noopener noreferrer">${m}</a>`;
+      }
+    );
+
+    // Escape everything…
+    s = escapeHtml(s);
+
+    // …then unescape only a strict allowlist of tags.
+    const allowTags = ['p', 'br', 'i', 'em', 'b', 'strong', 'u', 'ul', 'ol', 'li', 'a'];
+    allowTags.forEach((tag) => {
+      // opening tags
+      s = s.replace(new RegExp(`&lt;\\s*${tag}(\\s[^&]*?)?\\s*&gt;`, 'gi'), (m) => {
+        if (tag !== 'a') return m.replaceAll('&lt;', '<').replaceAll('&gt;', '>');
+        const raw = m.replaceAll('&lt;', '<').replaceAll('&gt;', '>');
+        const href = raw.match(/\bhref\s*=\s*(['"])(.*?)\1/i)?.[2];
+        const safeHref = href ? href.replace(/javascript:/gi, '') : null;
+        const attrs = safeHref ? ` href="${safeHref}" target="_blank" rel="noopener noreferrer"` : '';
+        return `<a${attrs}>`;
+      });
+      // closing tags
+      s = s.replace(new RegExp(`&lt;\\s*\\/\\s*${tag}\\s*&gt;`, 'gi'), `</${tag}>`);
+    });
+
+    return s;
   }
 
-  function ensureVolcanoLocationsRule() {
-    if (anyVolcanicEventsOn()) {
-      if (!map.hasLayer(hazards.volcanoLocations)) {
-        hazards.volcanoLocations.addTo(map);
-        volcanoLocationsAuto = true;
-      }
-    } else {
-      if (volcanoLocationsAuto && map.hasLayer(hazards.volcanoLocations)) {
-        map.removeLayer(hazards.volcanoLocations);
-      }
-      volcanoLocationsAuto = false;
-    }
+  const pad2 = (n) => String(n).padStart(2, '0');
+
+  function formatYMD(props) {
+    // Most of these layers use YEAR/MO/DAY (seen on volcanic layer 6)
+    const y = props.YEAR ?? props.year ?? props.Year;
+    const m = props.MO ?? props.mo ?? props.Month;
+    const d = props.DAY ?? props.day ?? props.Day;
+
+    if (y == null) return null;
+    if (m == null || d == null) return String(y);
+    return `${y}-${pad2(m)}-${pad2(d)}`;
   }
 
-  map.on('overlayadd', (e) => {
-    if (e.layer === hazards.vol_1850 || e.layer === hazards.vol_2150bc) {
-      ensureVolcanoLocationsRule();
-    }
-  });
+  function buildKeyValueTable(props, keys) {
+    const rows = keys
+      .map((k) => {
+        const v = props[k];
+        if (v == null || v === '') return '';
+        return `<tr>
+          <td style="padding:2px 10px 2px 0; opacity:.8;">${escapeHtml(k)}</td>
+          <td style="padding:2px 0;">${sanitizePopupHtml(v)}</td>
+        </tr>`;
+      })
+      .filter(Boolean)
+      .join('');
+    return rows ? `<table style="margin-top:6px;">${rows}</table>` : '';
+  }
 
-  map.on('overlayremove', (e) => {
-    if (e.layer === hazards.vol_1850 || e.layer === hazards.vol_2150bc) {
-      ensureVolcanoLocationsRule();
+  // ---------- renderer -> leaflet symbol ----------
+  // We fetch the layer JSON to read drawingInfo.renderer and reproduce it in Leaflet.
+  async function fetchLayerInfo(layerId) {
+    const url = `${HAZARDS_BASE}/${layerId}?f=pjson`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Layer info fetch failed for ${layerId}: ${res.status}`);
+    return await res.json();
+  }
+
+  function makeSvgMarkerHtml({ shape, size, fill, stroke, strokeWidth }) {
+    const s = size;
+    const half = s / 2;
+    const sw = strokeWidth;
+
+    let inner = '';
+
+    switch (shape) {
+      case 'square':
+        inner = `<rect x="${sw}" y="${sw}" width="${s - sw * 2}" height="${s - sw * 2}" rx="1" />`;
+        break;
+      case 'triangle':
+        inner = `<path d="M ${half} ${sw} L ${s - sw} ${s - sw} L ${sw} ${s - sw} Z" />`;
+        break;
+      case 'diamond':
+        inner = `<path d="M ${half} ${sw} L ${s - sw} ${half} L ${half} ${s - sw} L ${sw} ${half} Z" />`;
+        break;
+      case 'x':
+        inner = `
+          <path d="M ${sw} ${sw} L ${s - sw} ${s - sw}" />
+          <path d="M ${s - sw} ${sw} L ${sw} ${s - sw}" />
+        `;
+        break;
+      case 'cross':
+        inner = `
+          <path d="M ${half} ${sw} L ${half} ${s - sw}" />
+          <path d="M ${sw} ${half} L ${s - sw} ${half}" />
+        `;
+        break;
+      case 'circle':
+      default:
+        inner = `<circle cx="${half}" cy="${half}" r="${half - sw}" />`;
+        break;
     }
-  });
+
+    const isLineOnly = shape === 'x' || shape === 'cross';
+
+    return `
+      <svg width="${s}" height="${s}" viewBox="0 0 ${s} ${s}" xmlns="http://www.w3.org/2000/svg">
+        <g fill="${isLineOnly ? 'none' : fill}" stroke="${stroke}" stroke-width="${sw}" stroke-linecap="round">
+          ${inner}
+        </g>
+      </svg>
+    `;
+  }
+
+  function esriMarkerStyleToLeaflet(styleName) {
+    const s = String(styleName || '').toLowerCase();
+    if (s.includes('square')) return 'square';
+    if (s.includes('triangle')) return 'triangle';
+    if (s.includes('diamond')) return 'diamond';
+    if (s.includes('x')) return 'x';
+    if (s.includes('cross')) return 'cross';
+    return 'circle';
+  }
+
+  function markerFromEsriSymbol(sym) {
+    const fill = rgbaToCss(sym?.color);
+    const stroke = rgbaToCss(sym?.outline?.color ?? [255, 255, 255, 255]);
+    const strokeWidth = Math.max(1, Number(sym?.outline?.width ?? 1));
+    const size = Math.max(14, Number(sym?.size ?? 14));
+    const shape = esriMarkerStyleToLeaflet(sym?.style);
+
+    const html = makeSvgMarkerHtml({ shape, size, fill, stroke, strokeWidth });
+
+    return L.divIcon({
+      className: 'hazard-svg-icon',
+      html,
+      iconSize: [size, size],
+      iconAnchor: [size / 2, size / 2]
+    });
+  }
+
+  function lineStyleFromEsriSymbol(sym) {
+    return {
+      color: rgbaToCss(sym?.color),
+      weight: Math.max(1, Number(sym?.width ?? 1)),
+      opacity: 1
+    };
+  }
+
+  // Build a lookup for UniqueValueRenderer: value -> symbol
+  function buildUniqueValueLookup(renderer) {
+    const lookup = new Map();
+    const uvi = renderer?.uniqueValueInfos;
+    if (Array.isArray(uvi)) {
+      uvi.forEach((info) => lookup.set(String(info.value), info.symbol));
+    }
+    return lookup;
+  }
+
+  // ---------- layer factory ----------
+  async function createHazardFeatureLayer(layerId, popupBuilder, options = {}) {
+    const info = await fetchLayerInfo(layerId);
+    const renderer = info?.drawingInfo?.renderer;
+
+    const opacity = typeof options.opacity === 'number' ? options.opacity : 0.95;
+    const valueField = renderer?.field1 ? String(renderer.field1) : null;
+    const uniqueLookup = buildUniqueValueLookup(renderer);
+    const defaultSymbol = renderer?.defaultSymbol ?? null;
+
+    const layerUrl = `${HAZARDS_BASE}/${layerId}`;
+
+    // Point layers: use pointToLayer with renderer-derived symbol
+    if (String(info.geometryType || '').toLowerCase().includes('point')) {
+      return L.esri.featureLayer({
+        url: layerUrl,
+        opacity,
+        pointToLayer: (geojson, latlng) => {
+          const props = geojson?.properties || {};
+          const v = valueField ? props[valueField] : null;
+          const vKey = v == null ? null : String(v); // NORMALIZE for renderer matching
+
+          const sym =
+            (vKey != null ? uniqueLookup.get(vKey) : null) ||
+            (v == null ? uniqueLookup.get('<Null>') : null) ||
+            defaultSymbol ||
+            { style: 'esriSMSCircle', color: [255, 0, 0, 200], size: 12, outline: { color: [255, 255, 255, 255], width: 1 } };
+
+          const icon = markerFromEsriSymbol(sym);
+          return L.marker(latlng, { icon, opacity: 1 });
+        },
+        onEachFeature: (feature, leafletLayer) => {
+          const props = feature?.properties || {};
+          const html = popupBuilder(props);
+          if (!html) return;
+
+          leafletLayer.bindPopup(html, { maxWidth: 420, closeButton: false, autoPan: true });
+
+          // Hover behavior (desktop): open popup on mouseover, close on mouseout.
+          leafletLayer.on('mouseover', () => {
+            try { leafletLayer.openPopup(); } catch (_) {}
+          });
+
+          leafletLayer.on('mouseout', () => {
+            try { leafletLayer.closePopup(); } catch (_) {}
+          });
+
+          // Still allow click to pin-open (nice for mobile)
+          leafletLayer.on('click', () => {
+            try { leafletLayer.openPopup(); } catch (_) {}
+          });
+        }
+      });
+    }
+
+    // Line layers: use style callback with renderer-derived symbol
+    if (String(info.geometryType || '').toLowerCase().includes('polyline')) {
+      return L.esri.featureLayer({
+        url: layerUrl,
+        opacity,
+        style: (feature) => {
+          const props = feature?.properties || {};
+          const v = valueField ? props[valueField] : null;
+          const vKey = v == null ? null : String(v); // NORMALIZE for renderer matching
+
+          const sym =
+            (vKey != null ? uniqueLookup.get(vKey) : null) ||
+            (v == null ? uniqueLookup.get('<Null>') : null) ||
+            defaultSymbol ||
+            { style: 'esriSLSSolid', color: [255, 170, 0, 255], width: 1 };
+
+          return lineStyleFromEsriSymbol(sym);
+        },
+        onEachFeature: (feature, leafletLayer) => {
+          const props = feature?.properties || {};
+          const html = popupBuilder(props);
+          if (!html) return;
+
+          leafletLayer.bindPopup(html, { maxWidth: 420, closeButton: false, autoPan: true });
+
+          leafletLayer.on('mouseover', () => {
+            try { leafletLayer.openPopup(); } catch (_) {}
+          });
+          leafletLayer.on('mouseout', () => {
+            try { leafletLayer.closePopup(); } catch (_) {}
+          });
+          leafletLayer.on('click', () => {
+            try { leafletLayer.openPopup(); } catch (_) {}
+          });
+        }
+      });
+    }
+
+    console.warn('Unsupported geometry type for hazards layer:', layerId, info.geometryType);
+    return null;
+  }
+
+  // ---------- popup builders (you can refine later) ----------
+  function popupVolcano(props) {
+    const title = props.NAME || props.name || 'Volcanic Eruption';
+    const date = formatYMD(props);
+
+    const details = buildKeyValueTable(props, [
+      'LOCATION',
+      'COUNTRY',
+      'VEI',
+      'DEATHS',
+      'FATALITIES',
+      'DAMAGE_MILLIONS_DOLLARS',
+      'COMMENTS'
+    ]);
+
+    return `
+      <div style="font-size:14px;">
+        <div style="font-weight:700; margin-bottom:4px;">${escapeHtml(title)}</div>
+        ${date ? `<div style="opacity:.85; margin-bottom:6px;">Date: ${escapeHtml(date)}</div>` : ''}
+        ${details}
+      </div>
+    `;
+  }
+
+  function popupEarthquake(props) {
+    const title = props.NAME || props.name || props.LOCATION || 'Significant Earthquake';
+    const date = formatYMD(props);
+
+    const details = buildKeyValueTable(props, [
+      'MAGNITUDE',
+      'DEPTH',
+      'LOCATION',
+      'COUNTRY',
+      'DEATHS',
+      'DAMAGE_MILLIONS_DOLLARS',
+      'COMMENTS'
+    ]);
+
+    return `
+      <div style="font-size:14px;">
+        <div style="font-weight:700; margin-bottom:4px;">${escapeHtml(title)}</div>
+        ${date ? `<div style="opacity:.85; margin-bottom:6px;">Date: ${escapeHtml(date)}</div>` : ''}
+        ${details}
+      </div>
+    `;
+  }
+
+  function popupTsunamiEvent(props) {
+    const title = props.NAME || props.name || props.LOCATION || 'Tsunami Event';
+    const date = formatYMD(props);
+
+    const details = buildKeyValueTable(props, [
+      'CAUSE',
+      'MAX_HEIGHT',
+      'DEATHS',
+      'COUNTRY',
+      'COMMENTS'
+    ]);
+
+    return `
+      <div style="font-size:14px;">
+        <div style="font-weight:700; margin-bottom:4px;">${escapeHtml(title)}</div>
+        ${date ? `<div style="opacity:.85; margin-bottom:6px;">Date: ${escapeHtml(date)}</div>` : ''}
+        ${details}
+      </div>
+    `;
+  }
+
+  function popupTsunamiObs(props) {
+    const title = props.LOCATION || props.NAME || props.name || 'Tsunami Observation';
+    const date = formatYMD(props);
+
+    const details = buildKeyValueTable(props, [
+      'RUNUP',
+      'WATER_HEIGHT',
+      'COUNTRY',
+      'COMMENTS'
+    ]);
+
+    return `
+      <div style="font-size:14px;">
+        <div style="font-weight:700; margin-bottom:4px;">${escapeHtml(title)}</div>
+        ${date ? `<div style="opacity:.85; margin-bottom:6px;">Date: ${escapeHtml(date)}</div>` : ''}
+        ${details}
+      </div>
+    `;
+  }
+
+  function popupPlates(props) {
+    const title = props.geogdesc || 'Plate Boundary';
+    const type = props.type || '';
+    return `
+      <div style="font-size:14px;">
+        <div style="font-weight:700; margin-bottom:4px;">${escapeHtml(title)}</div>
+        ${type ? `<div style="opacity:.85;">Type: ${escapeHtml(type)}</div>` : ''}
+      </div>
+    `;
+  }
+
+  // ---------- build hazard layers (ALL data, no WHERE filters) ----------
+  // IDs confirmed from the service:
+  // 0 = Tsunami Events
+  // 3 = Tsunami Observations (we still build it here, but DO NOT register it in menu)
+  // 5 = Significant Earthquakes
+  // 6 = Significant Volcanic Eruptions
+  // 12 = Plate Boundaries [from UTIG]
+  (async () => {
+    try {
+      hazards = {
+        tsunamiEvents: await createHazardFeatureLayer(0, popupTsunamiEvent, { opacity: 0.95 }),
+        tsunamiObs: await createHazardFeatureLayer(3, popupTsunamiObs, { opacity: 0.95 }), // built but not shown in menu
+        earthquakes: await createHazardFeatureLayer(5, popupEarthquake, { opacity: 0.95 }),
+        volcanoes: await createHazardFeatureLayer(6, popupVolcano, { opacity: 0.95 }),
+        plates: await createHazardFeatureLayer(12, popupPlates, { opacity: 0.95 })
+      };
+
+      // Register hazards overlays AFTER hazards finishes async init
+      setupHazardsMenu(hazards);
+
+      // IMPORTANT: Do NOT auto-add any of these to the map.
+      // They will be toggled via the layer control.
+    } catch (e) {
+      console.error('Failed to initialise hazards layers:', e);
+      hazards = null;
+    }
+  })();
+}
+
+// Master toggle layer (adds/removes a bundle of layers)
+const HazardsAllToggle = L.Layer.extend({
+  initialize(layers) {
+    this._layers = (layers || []).filter(Boolean);
+  },
+  onAdd(map) {
+    this._map = map;
+    this._layers.forEach((l) => map.addLayer(l));
+  },
+  onRemove(map) {
+    this._layers.forEach((l) => map.removeLayer(l));
+    this._map = null;
+  }
+});
+
+function setupHazardsMenu(h) {
+  if (!h || !layerControl) return;
+
+  // Requirement: remove Tsunami Observations from dropdown and from "All Hazards"
+  const layersForAll = [
+    h.plates,
+    h.volcanoes,
+    h.tsunamiEvents,
+    h.earthquakes
+  ].filter(Boolean);
+
+  // 1) Add the master toggle first (without tsunamiObs)
+  if (layersForAll.length) {
+    const all = new HazardsAllToggle(layersForAll);
+    addOverlayInOverlaysSection(all, 'Hazards (All)');
+  }
+
+  // 2) Add each hazard separately (without tsunamiObs)
+  if (h.plates) addOverlayInOverlaysSection(h.plates, 'Plate Lines');
+  if (h.volcanoes) addOverlayInOverlaysSection(h.volcanoes, 'Volcanoes'); // or 'Significant Volcanic Eruptions'
+  if (h.tsunamiEvents) addOverlayInOverlaysSection(h.tsunamiEvents, 'Tsunamis');
+  if (h.earthquakes) addOverlayInOverlaysSection(h.earthquakes, 'Earthquakes');
+
+  // Ensure section headers reflow correctly after async insertion
+  setTimeout(refreshLayerControlHeaders, 0);
 }
 
 // ------------------------------
@@ -1519,36 +1906,44 @@ async function createEsriLayerFromArcGISOnlineItem(itemId, options = {}) {
   }
   const item = await res.json();
 
-  // Common fields:
-  // - item.url (FeatureServer/MapServer/ImageServer)
-  // - item.type (Feature Service, Map Service, Image Service, Vector Tile Service, Tile Service)
   const url = item.url;
   if (!url) {
-    console.warn('ArcGIS item has no `url` (might be a Web Map / Web Scene):', itemId, item.type);
+    console.warn('ArcGIS item has no `url`:', itemId, item.type);
     return null;
   }
 
   const opacity = typeof options.opacity === 'number' ? options.opacity : 0.8;
 
-  // Heuristics by URL
-  if (url.includes('/FeatureServer')) {
-    // default to all features; user can refine later
-    return L.esri.featureLayer({ url, opacity });
-  }
-  if (url.includes('/MapServer')) {
-    return L.esri.dynamicMapLayer({ url, opacity });
-  }
-  if (url.includes('/ImageServer')) {
-    return L.esri.imageMapLayer({ url, opacity });
+  if (url.includes('/FeatureServer')) return L.esri.featureLayer({ url, opacity });
+  if (url.includes('/MapServer')) return L.esri.dynamicMapLayer({ url, opacity });
+  if (url.includes('/ImageServer')) return L.esri.imageMapLayer({ url, opacity });
+
+  // ✅ Vector Tile support (requires Leaflet.VectorGrid plugin)
+  if (url.includes('/VectorTileServer')) {
+    if (!L.vectorGrid || !L.vectorGrid.protobuf) {
+      console.warn('VectorGrid not found. Include Leaflet.VectorGrid to use VectorTileServer items:', itemId);
+      return null;
+    }
+
+    const styleUrl = `https://www.arcgis.com/sharing/rest/content/items/${encodeURIComponent(itemId)}/resources/styles/root.json`;
+
+    const styleRes = await fetch(`${styleUrl}?f=pjson`);
+    if (!styleRes.ok) {
+      console.warn('Vector tile style fetch failed:', itemId, styleRes.status);
+      return null;
+    }
+    const styleJson = await styleRes.json();
+
+    return L.vectorGrid.protobuf(`${url}/tile/{z}/{y}/{x}.pbf`, {
+      vectorTileLayerStyles: styleJson?.layers?.reduce?.((acc, layer) => {
+        return acc;
+      }, {}) || {},
+      opacity
+    });
   }
 
-  // As a fallback, try dynamic
-  try {
-    return L.esri.dynamicMapLayer({ url, opacity });
-  } catch (e) {
-    console.warn('Could not create Esri layer from:', itemId, url, e);
-    return null;
-  }
+  console.warn('Unsupported ArcGIS item URL type:', itemId, url);
+  return null;
 }
 
 // ------------------------------
@@ -1560,6 +1955,7 @@ const overlays = {
   ...(overlay_EsriNatGeo ? { "Labels (all en)": overlay_EsriNatGeo } : {}), // https://leaflet-extras.github.io/leaflet-providers/preview/
   "Railways": railwayOverlay, // https://leaflet-extras.github.io/leaflet-providers/preview/
   "Waterways": waterOverlay, // https://leaflet-extras.github.io/leaflet-providers/preview/
+  "Pole Shift": poleShiftGroup, // https://www.ncei.noaa.gov/maps/historical-declination/
   ...(overlay_WaymarkedSlopes ? { "Slopes": overlay_WaymarkedSlopes } : {}), // https://leaflet-extras.github.io/leaflet-providers/preview/
   ...(overlay_WaymarkedCycling ? { "Cycling": overlay_WaymarkedCycling } : {}), // https://leaflet-extras.github.io/leaflet-providers/preview/
   ...(overlay_WaymarkedHiking ? { "Hiking": overlay_WaymarkedHiking } : {}), // https://leaflet-extras.github.io/leaflet-providers/preview/
@@ -1567,22 +1963,110 @@ const overlays = {
   ...(overlay_EsriOcean ? { "Seafloor": overlay_EsriOcean } : {}), // https://leaflet-extras.github.io/leaflet-providers/preview/
   ...(overlay_NOAA_MultibeamMosaic ? { "Ocean Depth": overlay_NOAA_MultibeamMosaic } : {}), // https://www.ncei.noaa.gov/maps/bathymetry/
   ...(overlay_CartoDarkMatter ? { "Dark": overlay_CartoDarkMatter } : {}), // https://leaflet-extras.github.io/leaflet-providers/preview/
-  ...(overlay_ViirsEarthAtNight2012 ? { "Lights 2012": overlay_ViirsEarthAtNight2012 } : {}) // https://leaflet-extras.github.io/leaflet-providers/preview/
+  ...(overlay_ViirsEarthAtNight2012 ? { "Lights 2012": overlay_ViirsEarthAtNight2012 } : {}), // https://leaflet-extras.github.io/leaflet-providers/preview/
 };
 
-// Append Hazards (split exactly as you described)
-if (hazards) {
-  overlays["Volcanos"] = hazards.volcanoLocations; // https://www.ncei.noaa.gov/maps/hazards/
-  overlays["Plates"] = hazards.plateBoundaries; // https://www.ncei.noaa.gov/maps/hazards/
-  overlays["Tsunamis (1850+)"] = hazards.tsu_1850; // https://www.ncei.noaa.gov/maps/hazards/
-  overlays["Earthquakes (1850+)"] = hazards.eq_1850; // https://www.ncei.noaa.gov/maps/hazards/
-  overlays["Volcanos (1850+)"] = hazards.vol_1850; // https://www.ncei.noaa.gov/maps/hazards/
-  overlays["Tsunamis (2150 BC+)"] = hazards.tsu_2150bc; // https://www.ncei.noaa.gov/maps/hazards/
-  overlays["Earthquakes (2150 BC+)"] = hazards.eq_2150bc; // https://www.ncei.noaa.gov/maps/hazards/
-  overlays["Volcanos (2150 BC+)"] = hazards.vol_2150bc; // https://www.ncei.noaa.gov/maps/hazards/
+// Create layer control ONCE (before any async addOverlay calls)
+let layerControl = L.control.layers(null, overlays).addTo(map);
+
+// ------------------------------
+// Helpers to force async overlays into the "Overlays" section
+// ------------------------------
+function getOverlaysListEl() {
+  return document.querySelector('.leaflet-control-layers-overlays');
 }
 
+function findLabelByExactText(exactText) {
+  const list = getOverlaysListEl();
+  if (!list) return null;
+  const labels = Array.from(list.querySelectorAll('label'));
+  return labels.find((l) => (l.textContent || '').trim() === exactText) || null;
+}
+
+function moveLabelBefore(labelText, beforeTexts) {
+  const list = getOverlaysListEl();
+  if (!list) return;
+
+  const label = findLabelByExactText(labelText);
+  if (!label) return;
+
+  const labels = Array.from(list.querySelectorAll('label'));
+  const anchor =
+    labels.find((l) => beforeTexts.includes((l.textContent || '').trim())) || null;
+
+  if (!anchor) return;
+
+  list.insertBefore(label, anchor);
+}
+
+// Add overlay and then force its checkbox DOM node to sit above Markers/Journeys.
+function addOverlayInOverlaysSection(layer, labelText) {
+  if (!layer) return;
+
+  overlays[labelText] = layer;
+  layerControl.addOverlay(layer, labelText);
+
+  setTimeout(() => {
+    moveLabelBefore(labelText, [
+      'Layover - 0-0.5 days',
+      'Popped In - 1-3 days',
+      'Chilled Out - 3-30 days',
+      'Buzzed Around - 1-4 months',
+      'Medium Stay - 4-7 months',
+      'Long Stay - 7+ months'
+    ]);
+    refreshLayerControlHeaders();
+  }, 0);
+}
+
+// ------------------------------
+// Async overlays (Magnetics / Declination item)
+// ------------------------------
+(async () => { // https://www.arcgis.com/home/item.html?id=1aaac59a6076461e8e1380a7195222f6
+  const itemLayer = await createEsriLayerFromArcGISOnlineItem('1aaac59a6076461e8e1380a7195222f6', { opacity: 0.75 });
+  if (itemLayer) {
+    addOverlayInOverlaysSection(itemLayer, 'Magnetics');
+  }
+})();
+
+(async () => {
+  const DECLINATION_ITEM_ID = 'DECLINATION_ITEM_ID';
+  if (DECLINATION_ITEM_ID === 'DECLINATION_ITEM_ID') return;
+
+  const declLayer = await createEsriLayerFromArcGISOnlineItem(DECLINATION_ITEM_ID, { opacity: 0.75 });
+  if (declLayer) {
+    addOverlayInOverlaysSection(declLayer, 'Magnetic Declination');
+  }
+})();
+
+// ------------------------------
+// Hazards overlays (must be registered AFTER hazards finishes async init)
+// ------------------------------
+function registerHazardsOverlays(h) {
+  if (!h) return;
+
+  const pick = (...keys) => keys.map((k) => h[k]).find(Boolean) || null;
+
+  const volcanoes = pick('volcanoes', 'volcanoLocations', 'vol_1850', 'vol_2150bc');
+  const plates = pick('plates', 'plateBoundaries');
+
+  const tsunamiEvents = pick('tsunamiEvents');
+  const earthquakes = pick('earthquakes');
+
+  if (plates) addOverlayInOverlaysSection(plates, 'Plates');
+  if (volcanoes) addOverlayInOverlaysSection(volcanoes, 'Volcanoes');
+  if (tsunamiEvents) addOverlayInOverlaysSection(tsunamiEvents, 'Tsunami Events');
+  // intentionally NOT adding Tsunami Observations
+  if (earthquakes) addOverlayInOverlaysSection(earthquakes, 'Earthquakes');
+}
+
+// IMPORTANT: hazards is built async earlier, so the old `if (hazards) { ... }` never worked.
+// We now register hazards inside the hazards init success path (setupHazardsMenu).
+if (hazards) registerHazardsOverlays(hazards);
+
+// ------------------------------
 // Marker overlays with icons (keep exactly as you had)
+// ------------------------------
 Object.assign(overlays, {
   "<img src='images/icons/layover_icon.png' style='width:20px; height:20px; margin-right:5px; vertical-align:middle;'>Layover - 0-0.5 days":
     markerLayers['Layover - 0-0.5 days'],
@@ -1598,13 +2082,171 @@ Object.assign(overlays, {
     markerLayers['Long Stay - 7+ months']
 });
 
+// Because layerControl was created BEFORE markers were added to `overlays`, we must add them explicitly:
+layerControl.addOverlay(
+  markerLayers['Layover - 0-0.5 days'],
+  "<img src='images/icons/layover_icon.png' style='width:20px; height:20px; margin-right:5px; vertical-align:middle;'>Layover - 0-0.5 days"
+);
+layerControl.addOverlay(
+  markerLayers['Popped In - 1-3 days'],
+  "<img src='images/icons/popped_in_icon.png' style='width:20px; height:20px; margin-right:5px; vertical-align:middle;'>Popped In - 1-3 days"
+);
+layerControl.addOverlay(
+  markerLayers['Chilled Out - 3-30 days'],
+  "<img src='images/icons/chilled_out_icon.png' style='width:20px; height:20px; margin-right:5px; vertical-align:middle;'>Chilled Out - 3-30 days"
+);
+layerControl.addOverlay(
+  markerLayers['Buzzed Around - 1-4 months'],
+  "<img src='images/icons/buzzed_around_icon.png' style='width:20px; height:20px; margin-right:5px; vertical-align:middle;'>Buzzed Around - 1-4 months"
+);
+layerControl.addOverlay(
+  markerLayers['Medium Stay - 4-7 months'],
+  "<img src='images/icons/medium_stay_icon.png' style='width:20px; height:20px; margin-right:5px; vertical-align:middle;'>Medium Stay - 4-7 months"
+);
+layerControl.addOverlay(
+  markerLayers['Long Stay - 7+ months'],
+  "<img src='images/icons/long_stay_icon.png' style='width:20px; height:20px; margin-right:5px; vertical-align:middle;'>Long Stay - 7+ months"
+);
+
+// ------------------------------
 // Journeys as checkboxes
+// ------------------------------
+// Because layerControl was created BEFORE journeys were added to `overlays`, add explicitly:
 Object.entries(journeyLayersByName).forEach(([name, layer]) => {
   overlays[name] = layer;
+  layerControl.addOverlay(layer, name);
 });
 
-// Create layer control ONCE (after overlays is complete)
-const layerControl = L.control.layers(null, overlays).addTo(map);
+// ------------------------------
+// Pole Shift (FeatureServer layers) go into poleShiftGroup (not layerControl directly)
+// ------------------------------
+(async () => {
+  if (!HAS_ESRI) return;
+
+  const SVC_BASE = "https://services2.arcgis.com/C8EMgrsFcRFL6LrL/arcgis/rest/services";
+
+  // ---- Configure the year ramp you requested ----
+  const YEAR_MIN = 1590;
+  const YEAR_MAX = 2030;
+
+  // If you want to match the original page’s exact palette, change these two hex colors.
+  // (This gives a clean "old -> new" ramp by default.)
+  const START_HEX = "#2E7DFF"; // 1590
+  const END_HEX   = "#FF3B30"; // 2030
+
+  // Put Pole Shift above most overlays but below labels if you want; adjust as needed.
+  if (!map.getPane("poleShiftPane")) {
+    map.createPane("poleShiftPane");
+    map.getPane("poleShiftPane").style.zIndex = 420;
+  }
+
+  // ---- small color helpers (self-contained) ----
+  function hexToRgbLocal(hex) {
+    const h = String(hex).replace("#", "").trim();
+    const full = h.length === 3 ? h.split("").map((c) => c + c).join("") : h;
+    const n = parseInt(full, 16);
+    return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+  }
+
+  function rgbToHexLocal({ r, g, b }) {
+    const toHex = (v) => v.toString(16).padStart(2, "0");
+    return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+  }
+
+  function lerpLocal(a, b, t) {
+    return a + (b - a) * t;
+  }
+
+  function lerpColorHexLocal(aHex, bHex, t) {
+    const a = hexToRgbLocal(aHex);
+    const b = hexToRgbLocal(bHex);
+    return rgbToHexLocal({
+      r: Math.round(lerpLocal(a.r, b.r, t)),
+      g: Math.round(lerpLocal(a.g, b.g, t)),
+      b: Math.round(lerpLocal(a.b, b.b, t)),
+    });
+  }
+
+  function clamp01(t) {
+    return Math.max(0, Math.min(1, t));
+  }
+
+  function yearToColor(year) {
+    const y = Number(year);
+    if (!isFinite(y)) return END_HEX;
+    const t = clamp01((y - YEAR_MIN) / (YEAR_MAX - YEAR_MIN));
+    return lerpColorHexLocal(START_HEX, END_HEX, t);
+  }
+
+  // ---- Create ONLY the pole marker layers (no contour spaghetti, no graticule) ----
+  const dipPolesModeled = L.esri.featureLayer({
+    url: `${SVC_BASE}/dip_poles_modeled/FeatureServer/0`,
+    pane: "poleShiftPane",
+    // Styled markers (if it has YEAR, it will ramp; otherwise it defaults to END_HEX)
+    pointToLayer: (geojson, latlng) => {
+      const p = geojson?.properties || {};
+      const y = p.YEAR ?? p.year ?? p.Year;
+      const color = yearToColor(y);
+      return L.circleMarker(latlng, {
+        radius: 5,
+        weight: 1,
+        color: "#ffffff",
+        fillColor: color,
+        fillOpacity: 0.95
+      });
+    },
+    // Keep click popups working
+    onEachFeature: (feature, layer) => {
+      const p = feature?.properties || {};
+      const name = p.NAME ?? p.Name ?? "Modeled dip pole";
+      const y = p.YEAR ?? p.year ?? p.Year;
+      const html = `
+        <div style="font-size:14px;">
+          <div style="font-weight:700; margin-bottom:4px;">${String(name)}</div>
+          ${y != null ? `<div>Year: ${String(y)}</div>` : ""}
+        </div>
+      `;
+      layer.bindPopup(html, { maxWidth: 420 });
+    }
+  });
+
+  const observedPoleLocations = L.esri.featureLayer({
+    url: `${SVC_BASE}/Observed_Magnetic_Pole_Locations/FeatureServer/0`,
+    pane: "poleShiftPane",
+    pointToLayer: (geojson, latlng) => {
+      const p = geojson?.properties || {};
+      const y = p.YEAR ?? p.year ?? p.Year;
+      const color = yearToColor(y);
+      return L.circleMarker(latlng, {
+        radius: 5,
+        weight: 1,
+        color: "#ffffff",
+        fillColor: color,
+        fillOpacity: 0.95
+      });
+    },
+    onEachFeature: (feature, layer) => {
+      const p = feature?.properties || {};
+      const name = p.NAME ?? p.Name ?? "Observed pole";
+      const y = p.YEAR ?? p.year ?? p.Year;
+      const src = p.SOURCE ?? p.Source ?? "";
+      const html = `
+        <div style="font-size:14px;">
+          <div style="font-weight:700; margin-bottom:4px;">${String(name)}</div>
+          ${y != null ? `<div>Year: ${String(y)}</div>` : ""}
+          ${src ? `<div style="opacity:.85;">Source: ${String(src)}</div>` : ""}
+        </div>
+      `;
+      layer.bindPopup(html, { maxWidth: 420 });
+    }
+  });
+
+  // Add ONLY these to the Pole Shift group
+  poleShiftGroup.addLayer(dipPolesModeled);
+  poleShiftGroup.addLayer(observedPoleLocations);
+
+  // Remove graticule: DO NOT create/add 10_Degree_Graticule at all.
+})();
 
 // ------------------------------
 // Headers in layer control: Overlays, Markers, Journeys
@@ -1612,8 +2254,6 @@ const layerControl = L.control.layers(null, overlays).addTo(map);
 function addSectionHeaderToLayerControl({ className, title, findInsertBeforeLabel }) {
   const control = document.querySelector('.leaflet-control-layers');
   if (!control) return;
-
-  if (control.querySelector(`.${className}`)) return;
 
   const list = control.querySelector('.leaflet-control-layers-overlays');
   if (!list) return;
@@ -1645,7 +2285,14 @@ function addOverlaysHeaderToLayerControl() {
     title: 'Overlays',
     findInsertBeforeLabel: (labels) => {
       // Insert before the first “overlay” label (Areas is a safe anchor)
-      const overlayAnchors = ['Areas', 'Labels', 'Railways', 'Waterways', 'Slopes', 'Cycling', 'Hiking'];
+      const overlayAnchors = [
+        'Areas', 'Labels', 'Labels (all en)', 'Railways', 'Waterways', 'Pole Shift',
+        'Slopes', 'Cycling', 'Hiking', 'Elevation', 'Seafloor', 'Ocean Depth', 'Dark', 'Lights 2012',
+        'Magnetics', 'Magnetic Declination',
+        'Tsunami Events', 'Tsunami Observations', 'Earthquakes', 'Volcanoes', 'Plates',
+        'Tsunamis (1850+)', 'Earthquakes (1850+)', 'Volcanoes (1850+)',
+        'Tsunamis (2150 BC+)', 'Earthquakes (2150 BC+)', 'Volcanoes (2150 BC+)'
+      ];
       return labels.find((l) => overlayAnchors.includes((l.textContent || '').trim()));
     }
   });
@@ -1682,6 +2329,11 @@ function addJourneysHeaderToLayerControl() {
 }
 
 function refreshLayerControlHeaders() {
+  const list = getOverlaysListEl();
+  if (list) {
+    list.querySelectorAll('.overlays-section-header,.markers-section-header,.journeys-section-header')
+      .forEach((n) => n.remove());
+  }
   addOverlaysHeaderToLayerControl();
   addMarkersHeaderToLayerControl();
   addJourneysHeaderToLayerControl();
@@ -1940,7 +2592,6 @@ function arrowSpacingForZoom(z) {
 
 function createTripLine(startLatLng, endLatLng, startName, endName, mode = 'plane', startColor = 'red', endColor = null, jumpNumber = 1) {
   const { start: sLL, end: eLL } = unwrapLngs(startLatLng, endLatLng);
-
   const midLat = (sLL.lat + eLL.lat) / 2;
   const midLng = (sLL.lng + eLL.lng) / 2;
   const controlPoint = L.latLng(midLat + 2, midLng);
@@ -2058,7 +2709,6 @@ function createTripLine(startLatLng, endLatLng, startName, endName, mode = 'plan
   const px = zNow >= 10 ? 20 : zNow >= 7 ? 16 : 12;
   const ang = screenAngleAtSample(map, samplePts, midPos.idx);
   const emojiLatLng = offsetLatLngPerpendicularPx(map, midPos.latLng, ang, px);
-
   const transportIcon = L.divIcon({
     html: `<div style="
       font-size: 30px;
@@ -2133,7 +2783,6 @@ locations.forEach((location) => {
       if (showDetails && Array.isArray(location.image) && location.image.length > 0) {
         imageHtml = location.image.map((img) => `<img src="${img}" width="100" style="margin: 5px 0;"><br>`).join('');
       }
-
       const popupContent = `
         <b>${location.name}</b><br>
         ${location.suburbName ? `${location.suburbName}<br>` : ''}
@@ -2274,32 +2923,6 @@ function updatePolygons() {
 
 map.on('zoomend', updatePolygons);
 loadAllPolygons(locations);
-
-// ------------------------------
-// Add your missing ArcGIS item overlay(s)
-// ------------------------------
-// 1) The ArcGIS item you gave:
-(async () => {
-  const itemLayer = await createEsriLayerFromArcGISOnlineItem('1aaac59a6076461e8e1380a7195222f6', { opacity: 0.75 });
-  if (itemLayer) {
-    overlays['ArcGIS Item — 1aaac59a…'] = itemLayer;
-    layerControl.addOverlay(itemLayer, 'ArcGIS Item — 1aaac59a…');
-    setTimeout(refreshLayerControlHeaders, 0);
-  }
-})();
-
-// 2) NCEI Historical Declination:
-// The NCEI declination page is a web app; it typically references an ArcGIS Online item/service.
-// Once you identify its ArcGIS item id, add it here in the same way:
-// (Replace DECLINATION_ITEM_ID with the real id.)
-// (async () => {
-//   const declLayer = await createEsriLayerFromArcGISOnlineItem('DECLINATION_ITEM_ID', { opacity: 0.75 });
-//   if (declLayer) {
-//     overlays['Magnetic Declination'] = declLayer;
-//     layerControl.addOverlay(declLayer, 'Magnetic Declination');
-//     setTimeout(refreshLayerControlHeaders, 0);
-//   }
-// })();
 
 console.log(
   'Map loaded with categorized markers, overlay headers (Overlays/Markers/Journeys), extra overlays, hazards split layers, hover jump tooltips, per-journey checkboxes, gradient journeys + shadows, and local .json polygons.'
